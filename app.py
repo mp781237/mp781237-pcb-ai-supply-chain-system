@@ -8,35 +8,35 @@ import yfinance as yf
 
 st.set_page_config(page_title="PCB 供應鏈 AI 系統", layout="wide")
 
-st.title("📊 PCB 供應鏈 AI 學習與分析系統 v2.1")
+st.title("📊 PCB 供應鏈 AI 學習與分析系統 v2.2")
 st.caption("學習產業鏈位置、可轉債資訊、族群相對強弱與輪動策略。僅供研究與學習，非投資建議。")
 
 STOCKS: Dict[str, Dict[str, Dict[str, Any]]] = {
     "載板": {
-        "欣興": {"ticker": "3037.TW", "cb": True, "role": "ABF / BT 載板，AI GPU / ASIC 需求相關", "power": "Tier 1：AI 需求核心"},
-        "南電": {"ticker": "8046.TW", "cb": True, "role": "ABF 載板，半導體封裝材料鏈", "power": "Tier 1：AI 需求核心"},
-        "景碩": {"ticker": "3189.TW", "cb": True, "role": "載板，封裝基板族群", "power": "Tier 1：AI 需求核心"},
+        "欣興": {"code": "3037", "cb": True, "role": "ABF / BT 載板，AI GPU / ASIC 需求相關", "power": "Tier 1：AI 需求核心"},
+        "南電": {"code": "8046", "cb": True, "role": "ABF 載板，半導體封裝材料鏈", "power": "Tier 1：AI 需求核心"},
+        "景碩": {"code": "3189", "cb": True, "role": "載板，封裝基板族群", "power": "Tier 1：AI 需求核心"},
     },
     "CCL": {
-        "台光電": {"ticker": "2383.TW", "cb": False, "role": "高階 CCL，高頻高速材料", "power": "Tier 1：材料定價權"},
-        "台燿": {"ticker": "6274.TW", "cb": True, "role": "高階 CCL，AI 伺服器材料", "power": "Tier 1：材料定價權"},
-        "聯茂": {"ticker": "6213.TW", "cb": True, "role": "CCL，銅箔基板材料", "power": "Tier 2：材料循環"},
+        "台光電": {"code": "2383", "cb": False, "role": "高階 CCL，高頻高速材料", "power": "Tier 1：材料定價權"},
+        "台燿": {"code": "6274", "cb": True, "role": "高階 CCL，AI 伺服器材料", "power": "Tier 1：材料定價權"},
+        "聯茂": {"code": "6213", "cb": True, "role": "CCL，銅箔基板材料", "power": "Tier 2：材料循環"},
     },
     "PCB": {
-        "金像電": {"ticker": "2368.TW", "cb": True, "role": "伺服器 / AI PCB 硬板", "power": "Tier 3：接單與補漲"},
-        "華通": {"ticker": "2313.TW", "cb": True, "role": "PCB 硬板，消費電子與通訊板", "power": "Tier 3：接單與補漲"},
-        "健鼎": {"ticker": "3044.TW", "cb": False, "role": "PCB 硬板，規模型製造", "power": "Tier 3：接單與補漲"},
+        "金像電": {"code": "2368", "cb": True, "role": "伺服器 / AI PCB 硬板", "power": "Tier 3：接單與補漲"},
+        "華通": {"code": "2313", "cb": True, "role": "PCB 硬板，消費電子與通訊板", "power": "Tier 3：接單與補漲"},
+        "健鼎": {"code": "3044", "cb": False, "role": "PCB 硬板，規模型製造", "power": "Tier 3：接單與補漲"},
     },
     "上游材料": {
-        "金居": {"ticker": "8358.TW", "cb": True, "role": "銅箔，導電材料", "power": "Tier 2：漲價循環"},
-        "富喬": {"ticker": "1815.TW", "cb": True, "role": "玻纖布，PCB 結構材料", "power": "Tier 2：供需循環"},
-        "台玻": {"ticker": "1802.TW", "cb": False, "role": "玻纖與玻璃材料", "power": "Tier 2：材料循環"},
-        "達邁": {"ticker": "3645.TW", "cb": True, "role": "PI 材料，軟板上游", "power": "Tier 2：軟板材料"},
+        "金居": {"code": "8358", "cb": True, "role": "銅箔，導電材料", "power": "Tier 2：漲價循環"},
+        "富喬": {"code": "1815", "cb": True, "role": "玻纖布，PCB 結構材料", "power": "Tier 2：供需循環"},
+        "台玻": {"code": "1802", "cb": False, "role": "玻纖與玻璃材料", "power": "Tier 2：材料循環"},
+        "達邁": {"code": "3645", "cb": True, "role": "PI 材料，軟板上游", "power": "Tier 2：軟板材料"},
     },
     "設備": {
-        "志聖": {"ticker": "2467.TW", "cb": True, "role": "PCB / 載板製程設備，吃 Capex 循環", "power": "Capex 前置訊號"},
-        "由田": {"ticker": "3455.TW", "cb": True, "role": "檢測設備，PCB / 半導體相關", "power": "Capex 前置訊號"},
-        "群翊": {"ticker": "6664.TW", "cb": True, "role": "製程設備，PCB / 載板相關", "power": "Capex 前置訊號"},
+        "志聖": {"code": "2467", "cb": True, "role": "PCB / 載板製程設備，吃 Capex 循環", "power": "Capex 前置訊號"},
+        "由田": {"code": "3455", "cb": True, "role": "檢測設備，PCB / 半導體相關", "power": "Capex 前置訊號"},
+        "群翊": {"code": "6664", "cb": True, "role": "製程設備，PCB / 載板相關", "power": "Capex 前置訊號"},
     },
 }
 
@@ -52,12 +52,15 @@ QUESTION_BANK = [
 ]
 
 
+def ticker_candidates(code: str) -> List[str]:
+    return [f"{code}.TW", f"{code}.TWO"]
+
+
 @st.cache_data(ttl=60 * 30, show_spinner=False)
-def download_price(ticker: str, period: str = "1y") -> pd.DataFrame:
+def download_price_by_ticker(ticker: str, period: str = "1y") -> pd.DataFrame:
     df = yf.download(ticker, period=period, auto_adjust=False, progress=False, threads=False)
     if df is None or df.empty:
         return pd.DataFrame()
-
     if isinstance(df.columns, pd.MultiIndex):
         level0 = df.columns.get_level_values(0)
         price_key = "Adj Close" if "Adj Close" in level0 else "Close"
@@ -69,33 +72,43 @@ def download_price(ticker: str, period: str = "1y") -> pd.DataFrame:
         if price_key not in df.columns:
             return pd.DataFrame()
         close = df[price_key]
-
-    out = pd.DataFrame({"Close": pd.to_numeric(close, errors="coerce")}).dropna()
-    return out
+    return pd.DataFrame({"Close": pd.to_numeric(close, errors="coerce")}).dropna()
 
 
-def safe_return(ticker: str, lookback: int) -> float:
-    df = download_price(ticker, period="1y")
+@st.cache_data(ttl=60 * 30, show_spinner=False)
+def download_price(code: str, period: str = "1y") -> Tuple[pd.DataFrame, str]:
+    for ticker in ticker_candidates(code):
+        df = download_price_by_ticker(ticker, period=period)
+        if not df.empty:
+            return df, ticker
+    return pd.DataFrame(), "抓取失敗"
+
+
+def safe_return(code: str, lookback: int) -> Tuple[float, str]:
+    df, used_ticker = download_price(code, period="1y")
     if len(df) <= lookback:
-        return float("nan")
+        return float("nan"), used_ticker
     latest = float(df["Close"].iloc[-1])
     past = float(df["Close"].iloc[-lookback])
     if past == 0:
-        return float("nan")
-    return float((latest / past - 1) * 100)
+        return float("nan"), used_ticker
+    return float((latest / past - 1) * 100), used_ticker
 
 
 def build_stock_table() -> pd.DataFrame:
     rows: List[Dict[str, Any]] = []
     for category, group in STOCKS.items():
         for name, info in group.items():
+            code = info["code"]
+            ret20, used_ticker = safe_return(code, 20)
+            ret60, used_ticker_60 = safe_return(code, 60)
             rows.append({
                 "類別": category,
                 "公司": name,
-                "股號": info["ticker"].replace(".TW", ""),
-                "Ticker": info["ticker"],
-                "20日漲跌幅%": safe_return(info["ticker"], 20),
-                "60日漲跌幅%": safe_return(info["ticker"], 60),
+                "股號": code,
+                "實際Ticker": used_ticker if used_ticker != "抓取失敗" else used_ticker_60,
+                "20日漲跌幅%": ret20,
+                "60日漲跌幅%": ret60,
                 "是否有CB": "有" if info["cb"] else "無",
                 "產業定位": info["role"],
                 "權力分級": info["power"],
@@ -131,7 +144,7 @@ def determine_state(leader: float, ccl: float, pcb: float) -> Tuple[str, str, st
 def build_group_index(category: str, period: str = "1y") -> pd.DataFrame:
     series_list = []
     for name, info in STOCKS[category].items():
-        df = download_price(info["ticker"], period=period)
+        df, _ = download_price(info["code"], period=period)
         if df.empty:
             continue
         s = df["Close"].copy()
@@ -208,7 +221,7 @@ with tab_dashboard:
 
     st.subheader("20日強弱排名（含60日中期趨勢）")
     rank_table = table.dropna(subset=["20日漲跌幅%"]).sort_values("20日漲跌幅%", ascending=False)
-    rank_display = rank_table[["類別", "公司", "股號", "20日漲跌幅%", "60日漲跌幅%", "是否有CB", "權力分級"]].copy()
+    rank_display = rank_table[["類別", "公司", "股號", "實際Ticker", "20日漲跌幅%", "60日漲跌幅%", "是否有CB", "權力分級"]].copy()
     rank_display["20日漲跌幅%"] = pd.to_numeric(rank_display["20日漲跌幅%"], errors="coerce").round(2)
     rank_display["60日漲跌幅%"] = pd.to_numeric(rank_display["60日漲跌幅%"], errors="coerce").round(2)
     st.dataframe(rank_display, use_container_width=True, hide_index=True)
@@ -227,10 +240,14 @@ with tab_chain:
     if selected_category != "全部":
         display_table = display_table[display_table["類別"] == selected_category]
     st.dataframe(
-        display_table[["類別", "公司", "股號", "20日漲跌幅%", "60日漲跌幅%", "是否有CB", "產業定位", "權力分級"]],
+        display_table[["類別", "公司", "股號", "實際Ticker", "20日漲跌幅%", "60日漲跌幅%", "是否有CB", "產業定位", "權力分級"]],
         use_container_width=True,
         hide_index=True,
     )
+
+    failed = display_table[display_table["實際Ticker"] == "抓取失敗"]
+    if not failed.empty:
+        st.warning("以下股票 yfinance 仍抓取失敗，可改用其他資料源補強：" + "、".join(failed["公司"].tolist()))
 
     st.subheader("CB 觀察提醒")
     st.markdown("""
@@ -264,7 +281,7 @@ with tab_learning:
 with tab_strategy:
     st.header("策略判讀")
     st.markdown("""
-    v2.1 的目標不是自動交易，而是幫你建立判斷節奏：
+    v2.2 的目標不是自動交易，而是幫你建立判斷節奏：
 
     1. **先看權力端**：載板是否強？  
     2. **再看材料端**：CCL 是否跟上？  
