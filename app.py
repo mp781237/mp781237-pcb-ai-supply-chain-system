@@ -3,12 +3,13 @@ from typing import Any, Dict, List, Tuple
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
 
 st.set_page_config(page_title="PCB 供應鏈 AI 系統", layout="wide")
 
-st.title("📊 PCB 供應鏈 AI 學習與分析系統 v2.2")
+st.title("📊 PCB 供應鏈 AI 學習與分析系統 v2.3")
 st.caption("學習產業鏈位置、可轉債資訊、族群相對強弱與輪動策略。僅供研究與學習，非投資建議。")
 
 STOCKS: Dict[str, Dict[str, Dict[str, Any]]] = {
@@ -95,6 +96,20 @@ def safe_return(code: str, lookback: int) -> Tuple[float, str]:
     return float((latest / past - 1) * 100), used_ticker
 
 
+def classify_momentum(row: pd.Series) -> str:
+    r20 = row["20日漲跌幅%"]
+    r60 = row["60日漲跌幅%"]
+    if pd.isna(r20) or pd.isna(r60):
+        return "資料不足"
+    if r20 >= 0 and r60 < 0:
+        return "🔥 初動/轉強"
+    if r20 >= 0 and r60 >= 0:
+        return "🚀 主升/強勢"
+    if r20 < 0 and r60 >= 0:
+        return "🟡 強勢回檔"
+    return "❄️ 弱勢"
+
+
 def build_stock_table() -> pd.DataFrame:
     rows: List[Dict[str, Any]] = []
     for category, group in STOCKS.items():
@@ -113,7 +128,9 @@ def build_stock_table() -> pd.DataFrame:
                 "產業定位": info["role"],
                 "權力分級": info["power"],
             })
-    return pd.DataFrame(rows)
+    table = pd.DataFrame(rows)
+    table["動能象限"] = table.apply(classify_momentum, axis=1)
+    return table
 
 
 def group_return(table: pd.DataFrame, category: str, column: str = "20日漲跌幅%") -> float:
@@ -165,6 +182,33 @@ def build_all_group_indices(period: str = "1y") -> pd.DataFrame:
     return pd.concat(frames, axis=1).dropna()
 
 
+def add_quadrant_shapes(fig: go.Figure, df: pd.DataFrame) -> go.Figure:
+    x_values = pd.to_numeric(df["60日漲跌幅%"], errors="coerce").dropna()
+    y_values = pd.to_numeric(df["20日漲跌幅%"], errors="coerce").dropna()
+    if x_values.empty or y_values.empty:
+        return fig
+    x_min = min(float(x_values.min()), -1.0)
+    x_max = max(float(x_values.max()), 1.0)
+    y_min = min(float(y_values.min()), -1.0)
+    y_max = max(float(y_values.max()), 1.0)
+    pad_x = max((x_max - x_min) * 0.12, 2.0)
+    pad_y = max((y_max - y_min) * 0.12, 2.0)
+    x_min -= pad_x
+    x_max += pad_x
+    y_min -= pad_y
+    y_max += pad_y
+
+    fig.add_hline(y=0, line_dash="dash", line_color="gray")
+    fig.add_vline(x=0, line_dash="dash", line_color="gray")
+    fig.update_xaxes(range=[x_min, x_max], zeroline=False)
+    fig.update_yaxes(range=[y_min, y_max], zeroline=False)
+    fig.add_annotation(x=x_max, y=y_max, text="🚀 主升/強勢", showarrow=False, xanchor="right", yanchor="top")
+    fig.add_annotation(x=x_min, y=y_max, text="🔥 初動/轉強", showarrow=False, xanchor="left", yanchor="top")
+    fig.add_annotation(x=x_max, y=y_min, text="🟡 強勢回檔", showarrow=False, xanchor="right", yanchor="bottom")
+    fig.add_annotation(x=x_min, y=y_min, text="❄️ 弱勢", showarrow=False, xanchor="left", yanchor="bottom")
+    return fig
+
+
 def init_learning_state() -> None:
     if "answered" not in st.session_state:
         st.session_state.answered = {}
@@ -210,6 +254,27 @@ with tab_dashboard:
     col2.metric("CCL Core", fmt_pct(ccl_r), delta=f"60日 {fmt_pct(ccl_60)}")
     col3.metric("PCB Follower", fmt_pct(pcb_r), delta=f"60日 {fmt_pct(pcb_60)}")
 
+    st.subheader("動能象限圖（X=60日中期趨勢，Y=20日短期動能）")
+    quadrant_df = table.dropna(subset=["20日漲跌幅%", "60日漲跌幅%"]).copy()
+    quadrant_df["20日漲跌幅%"] = pd.to_numeric(quadrant_df["20日漲跌幅%"], errors="coerce")
+    quadrant_df["60日漲跌幅%"] = pd.to_numeric(quadrant_df["60日漲跌幅%"], errors="coerce")
+    if quadrant_df.empty:
+        st.info("目前無法取得足夠資料繪製象限圖。")
+    else:
+        fig_q = px.scatter(
+            quadrant_df,
+            x="60日漲跌幅%",
+            y="20日漲跌幅%",
+            color="類別",
+            text="公司",
+            hover_data=["股號", "實際Ticker", "是否有CB", "動能象限", "權力分級"],
+            title="20日 vs 60日 動能象限",
+        )
+        fig_q.update_traces(textposition="top center", marker=dict(size=12, opacity=0.85))
+        fig_q.update_layout(xaxis_title="60日漲跌幅（中期趨勢）", yaxis_title="20日漲跌幅（短期動能）", height=620)
+        fig_q = add_quadrant_shapes(fig_q, quadrant_df)
+        st.plotly_chart(fig_q, use_container_width=True)
+
     st.subheader("核心族群走勢（等權指數，起點=100）")
     group_indices = build_all_group_indices(period="1y")
     if group_indices.empty:
@@ -221,7 +286,7 @@ with tab_dashboard:
 
     st.subheader("20日強弱排名（含60日中期趨勢）")
     rank_table = table.dropna(subset=["20日漲跌幅%"]).sort_values("20日漲跌幅%", ascending=False)
-    rank_display = rank_table[["類別", "公司", "股號", "實際Ticker", "20日漲跌幅%", "60日漲跌幅%", "是否有CB", "權力分級"]].copy()
+    rank_display = rank_table[["類別", "公司", "股號", "實際Ticker", "20日漲跌幅%", "60日漲跌幅%", "動能象限", "是否有CB", "權力分級"]].copy()
     rank_display["20日漲跌幅%"] = pd.to_numeric(rank_display["20日漲跌幅%"], errors="coerce").round(2)
     rank_display["60日漲跌幅%"] = pd.to_numeric(rank_display["60日漲跌幅%"], errors="coerce").round(2)
     st.dataframe(rank_display, use_container_width=True, hide_index=True)
@@ -240,7 +305,7 @@ with tab_chain:
     if selected_category != "全部":
         display_table = display_table[display_table["類別"] == selected_category]
     st.dataframe(
-        display_table[["類別", "公司", "股號", "實際Ticker", "20日漲跌幅%", "60日漲跌幅%", "是否有CB", "產業定位", "權力分級"]],
+        display_table[["類別", "公司", "股號", "實際Ticker", "20日漲跌幅%", "60日漲跌幅%", "動能象限", "是否有CB", "產業定位", "權力分級"]],
         use_container_width=True,
         hide_index=True,
     )
@@ -281,24 +346,25 @@ with tab_learning:
 with tab_strategy:
     st.header("策略判讀")
     st.markdown("""
-    v2.2 的目標不是自動交易，而是幫你建立判斷節奏：
+    v2.3 的目標不是自動交易，而是幫你建立判斷節奏：
 
     1. **先看權力端**：載板是否強？  
     2. **再看材料端**：CCL 是否跟上？  
     3. **最後看製造端**：PCB 是否落後且仍有補漲可能？  
-    4. **用60日確認中期趨勢**：避免只看短線20日訊號。
+    4. **用60日確認中期趨勢**：避免只看短線20日訊號。  
+    5. **用象限圖看個股節奏**：分辨初動、主升、回檔與弱勢。
     """)
 
     st.subheader("目前狀態解讀")
     st.write(f"狀態：{state}")
     st.write(explanation)
 
-    st.subheader("短中期動能判讀")
+    st.subheader("動能象限判讀")
     st.markdown("""
-    - **20日強、60日弱**：可能是初動或急拉。  
-    - **20日弱、60日強**：可能是強勢股回檔。  
-    - **20日與60日都強**：偏主升段。  
-    - **20日與60日都弱**：偏弱勢或尚未輪動。
+    - **🔥 初動/轉強（20日強、60日弱）**：短線剛轉強，值得觀察是否從弱轉強。  
+    - **🚀 主升/強勢（20日強、60日強）**：短中期同步強，代表趨勢明確但也要注意追高。  
+    - **🟡 強勢回檔（20日弱、60日強）**：中期仍強但短線修正，可觀察是否出現二次轉強。  
+    - **❄️ 弱勢（20日弱、60日弱）**：短中期都弱，通常先觀望。
     """)
 
     st.subheader("初步行動框架")
@@ -311,7 +377,7 @@ with tab_strategy:
 
     st.subheader("下一版可加入")
     st.markdown("""
-    - 動能象限圖：X軸60日、Y軸20日。  
     - 回測模組：驗證「載板 > CCL > PCB」是否真的有補漲效果。  
-    - CB 模組：輸入轉換價、市價、債價後，計算溢價率。
+    - CB 模組：輸入轉換價、市價、債價後，計算溢價率。  
+    - 個股頁：點選公司後顯示歷史走勢、角色說明與可轉債狀態。
     """)
