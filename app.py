@@ -6,9 +6,9 @@ import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
 
-st.set_page_config(page_title="PCB 供應鏈 AI 系統 v2.5", layout="wide")
-st.title("📊 PCB 供應鏈 AI 學習與分析系統 v2.5")
-st.caption("個股選股回測版：輪動成立後，不買平均，而是挑 PCB 強勢股。僅供研究，非投資建議。")
+st.set_page_config(page_title="PCB 供應鏈 AI 系統 v3", layout="wide")
+st.title("📊 PCB 供應鏈 AI 學習與分析系統 v3")
+st.caption("v2.5 個股選股回測 + v3 嚴格條件等權回測（含敏感度測試）。僅供研究，非投資建議。")
 
 STOCKS: Dict[str, Dict[str, Dict[str, Any]]] = {
     "載板": {"欣興":{"code":"3037","cb":True,"role":"ABF/BT載板，AI需求核心"},"南電":{"code":"8046","cb":True,"role":"ABF載板"},"景碩":{"code":"3189","cb":True,"role":"封裝基板"}},
@@ -18,6 +18,8 @@ STOCKS: Dict[str, Dict[str, Dict[str, Any]]] = {
     "設備": {"志聖":{"code":"2467","cb":True,"role":"PCB/載板設備"},"由田":{"code":"3455","cb":True,"role":"檢測設備"},"群翊":{"code":"6664","cb":True,"role":"製程設備"}}
 }
 CORE = ["載板","CCL","PCB"]
+BENCH_CODE = "0050"
+FEE_BUY = 0.001425; FEE_SELL = 0.001425; TAX_SELL = 0.003
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def dl_ticker(ticker: str, period: str="5y") -> pd.DataFrame:
@@ -136,6 +138,93 @@ def run_bt(period, max_hold, exposure, top_n, stop_loss, take_profit, require_in
     metrics={"總報酬%":(curve["策略淨值"].iloc[-1]-1)*100 if not curve.empty else float("nan"),"CAGR%":cagr(curve["策略淨值"])*100 if not curve.empty else float("nan"),"MDD%":mdd(curve["策略淨值"])*100 if not curve.empty else float("nan"),"交易次數":float(len(log)),"勝率%":log["交易報酬%"].gt(0).mean()*100 if not log.empty else float("nan"),"平均單筆%":log["交易報酬%"].mean() if not log.empty else float("nan"),"PCB等權買進持有%":(curve["PCB等權買進持有"].iloc[-1]-1)*100 if not curve.empty else float("nan")}
     return curve,log,metrics
 
+def run_strict_bt(period, lookback, hold, tp, sl, leader_min, core_min, follower_max, bench_min, position_size):
+    """v3 嚴格回測：6 條件全部成立 → 進場 PCB 三檔等權，含交易成本。"""
+    gi=all_indices(period); pxs=stock_prices("PCB",period); bdf,_=dl(BENCH_CODE,period)
+    if gi.empty or pxs.empty or bdf.empty: return pd.DataFrame(),pd.DataFrame(),{},pd.DataFrame()
+    bench=bdf.Close
+    idx=gi.index.intersection(pxs.index).intersection(bench.index)
+    if len(idx)<lookback+5: return pd.DataFrame(),pd.DataFrame(),{},pd.DataFrame()
+    gi=gi.loc[idx]; pxs=pxs.loc[idx]; bench=bench.loc[idx]
+    glb=pd.DataFrame({c:gi[c]/gi[c].shift(lookback)-1 for c in CORE})
+    blb=bench/bench.shift(lookback)-1
+    sig=((glb["載板"]>leader_min)&(glb["CCL"]>core_min)&(glb["載板"]>glb["CCL"])
+         &(glb["CCL"]>glb["PCB"])&(glb["PCB"]<follower_max)&(blb>bench_min))
+    cash=1.0; in_pos=False; entry_i=None; units={}; entry_px={}; entry_inv=0.0
+    cooldown=False; trades=[]; rec=[]
+    codes=list(pxs.columns)
+    bench_eq=bench/bench.iloc[0]; foll_eq=(pxs/pxs.iloc[0]).mean(axis=1)
+    for i,d in enumerate(idx):
+        mv=sum(units[c]*pxs.at[d,c] for c in units) if in_pos else 0.0
+        if in_pos:
+            held=i-entry_i
+            basis=sum(units[c]*entry_px[c] for c in units)
+            gret=mv/basis-1 if basis>0 else 0.0
+            reason=None
+            if held>=hold: reason=f"持滿{hold}日"
+            elif gret>=tp: reason="停利"
+            elif gret<=sl: reason="停損"
+            if reason:
+                proceeds=mv*(1-FEE_SELL-TAX_SELL)
+                cash+=proceeds
+                nret=proceeds/entry_inv-1
+                trades.append({"進場日":idx[entry_i].date(),"出場日":d.date(),"持有天數":held,"出場原因":reason,
+                               "Leader_LB%":float(glb.loc[idx[entry_i-1],"載板"])*100,"Core_LB%":float(glb.loc[idx[entry_i-1],"CCL"])*100,
+                               "Follower_LB%":float(glb.loc[idx[entry_i-1],"PCB"])*100,"Bench_LB%":float(blb.loc[idx[entry_i-1]])*100,
+                               "毛報酬%":gret*100,"淨報酬%":nret*100,"出場後淨值":cash})
+                in_pos=False; units={}; entry_px={}; cooldown=True
+                rec.append({"Date":d,"策略淨值":cash,"0050買進持有":float(bench_eq.loc[d]),"PCB等權買進持有":float(foll_eq.loc[d])})
+                continue
+        if (not in_pos) and i>=1 and (not cooldown) and bool(sig.iloc[i-1]) and pd.notna(sig.iloc[i-1]):
+            buy=cash*position_size
+            per=buy/len(codes)
+            ok=True; tu={}; te={}
+            for c in codes:
+                px=pxs.at[d,c]
+                if pd.isna(px) or px<=0: ok=False; break
+                shares=(per/(1+FEE_BUY))/px
+                tu[c]=shares; te[c]=float(px)
+            if ok:
+                units=tu; entry_px=te; entry_inv=buy
+                cash-=buy; in_pos=True; entry_i=i
+        cooldown=False
+        eq=cash+(sum(units[c]*pxs.at[d,c] for c in units) if in_pos else 0.0)
+        rec.append({"Date":d,"策略淨值":eq,"0050買進持有":float(bench_eq.loc[d]),"PCB等權買進持有":float(foll_eq.loc[d])})
+    curve=pd.DataFrame(rec).drop_duplicates("Date",keep="last").set_index("Date")
+    log=pd.DataFrame(trades)
+    eq=curve["策略淨值"]
+    metrics={
+        "總報酬%":(eq.iloc[-1]-1)*100 if not eq.empty else float("nan"),
+        "CAGR%":cagr(eq)*100,
+        "MDD%":mdd(eq)*100,
+        "Sharpe":float(eq.pct_change().mean()*252/(eq.pct_change().std()*math.sqrt(252))) if eq.pct_change().std()>0 else float("nan"),
+        "交易次數":float(len(log)),
+        "勝率%":log["淨報酬%"].gt(0).mean()*100 if not log.empty else float("nan"),
+        "平均單筆%":log["淨報酬%"].mean() if not log.empty else float("nan"),
+        "0050買進持有%":(curve["0050買進持有"].iloc[-1]-1)*100,
+        "PCB等權買進持有%":(curve["PCB等權買進持有"].iloc[-1]-1)*100,
+    }
+    sig_df=pd.DataFrame({"Date":idx,"訊號":sig.values}).set_index("Date")
+    return curve,log,metrics,sig_df
+
+def run_sensitivity(period, leader_min, core_min, follower_max, bench_min, position_size,
+                    lookbacks, holdings, tps, sls):
+    rows=[]
+    total=len(lookbacks)*len(holdings)*len(tps)*len(sls); cnt=0
+    bar=st.progress(0.0, text=f"敏感度測試 0/{total}")
+    for lb in lookbacks:
+        for hd in holdings:
+            for tp in tps:
+                for sl in sls:
+                    cnt+=1; bar.progress(cnt/total, text=f"敏感度測試 {cnt}/{total}")
+                    _,log,m,_=run_strict_bt(period,lb,hd,tp,sl,leader_min,core_min,follower_max,bench_min,position_size)
+                    rows.append({"lookback":lb,"hold":hd,"TP":tp,"SL":sl,
+                                 "CAGR%":m.get("CAGR%",float("nan")),"MDD%":m.get("MDD%",float("nan")),
+                                 "Sharpe":m.get("Sharpe",float("nan")),"勝率%":m.get("勝率%",float("nan")),
+                                 "交易次數":int(m.get("交易次數",0))})
+    bar.empty()
+    return pd.DataFrame(rows)
+
 def add_quadrants(fig,df):
     fig.add_hline(y=0,line_dash="dash",line_color="gray"); fig.add_vline(x=0,line_dash="dash",line_color="gray")
     fig.add_annotation(x=1,y=1,xref="paper",yref="paper",text="🚀 主升/強勢",showarrow=False,xanchor="right")
@@ -148,7 +237,7 @@ with st.spinner("正在抓取台股資料……"):
 leader=table[table.類別=="載板"]["20日漲跌幅%"].mean(); ccl=table[table.類別=="CCL"]["20日漲跌幅%"].mean(); pcb=table[table.類別=="PCB"]["20日漲跌幅%"].mean()
 state="🔥 標準輪動" if leader>ccl>pcb else ("⚠️ PCB強於載板" if pcb>leader else "🟡 觀望")
 
-t1,t2,t3,t4=st.tabs(["📈 儀表板","🧭 產業鏈","🎓 學習","📊 個股回測v2"])
+t1,t2,t3,t4,t5=st.tabs(["📈 儀表板","🧭 產業鏈","🎓 學習","📊 個股回測v2","📐 嚴格回測v3"])
 with t1:
     st.header("市場狀態"); st.info(state)
     c1,c2,c3=st.columns(3); c1.metric("載板20日",pct(leader)); c2.metric("CCL20日",pct(ccl)); c3.metric("PCB20日",pct(pcb))
@@ -183,3 +272,58 @@ with t4:
             if log.empty: st.info("沒有完成交易。")
             else:
                 log["交易報酬%"] = pd.to_numeric(log["交易報酬%"],errors="coerce").round(2); st.dataframe(log,use_container_width=True,hide_index=True); st.download_button("下載交易紀錄",log.to_csv(index=False).encode("utf-8-sig"),"trade_log_v2.csv")
+with t5:
+    st.header("📐 嚴格條件回測 v3")
+    st.markdown("**6 條件全部成立才進場**：①Leader_LB > leader_min ②Core_LB > core_min ③Leader>Core ④Core>Follower ⑤Follower<follower_max ⑥0050_LB>bench_min。進場買 PCB 三檔等權（金像電/華通/健鼎），含交易成本（買 0.1425% / 賣 0.1425% + 證交稅 0.3%）。")
+    cA,cB,cC=st.columns(3)
+    period_v3=cA.selectbox("期間",["2y","5y","10y","max"],index=2,key="period_v3")
+    lookback_v3=cB.slider("Lookback (天)",10,60,20,5,key="lb_v3")
+    hold_v3=cC.slider("最多持有 (天)",10,60,20,5,key="hd_v3")
+    cD,cE,cF=cA,cB,cC
+    cD,cE,cF=st.columns(3)
+    tp_v3=cD.slider("停利",0.05,0.40,0.15,0.05,key="tp_v3")
+    sl_v3=cE.slider("停損 (絕對值)",0.05,0.20,0.10,0.01,key="sl_v3")
+    pos_v3=cF.slider("進場部位 (% 現金)",0.1,1.0,0.5,0.1,key="pos_v3")
+    cG,cH,cI,cJ=st.columns(4)
+    leader_min=cG.slider("Leader_min",0.0,0.30,0.10,0.01,key="lm")
+    core_min=cH.slider("Core_min",0.0,0.20,0.05,0.01,key="cm")
+    follower_max=cI.slider("Follower_max",0.0,0.20,0.05,0.01,key="fm")
+    bench_min=cJ.slider("Bench_min",-0.10,0.10,0.0,0.01,key="bm")
+    sl_v3=-abs(sl_v3)
+    if st.button("執行 v3 回測",key="run_v3"):
+        with st.spinner("回測中…"):
+            curve,log,met,sigdf=run_strict_bt(period_v3,lookback_v3,hold_v3,tp_v3,sl_v3,
+                                              leader_min,core_min,follower_max,bench_min,pos_v3)
+        if curve.empty: st.error("資料不足或回測失敗。")
+        else:
+            n_sig=int(sigdf["訊號"].fillna(False).astype(bool).sum())
+            st.caption(f"期間訊號日數：{n_sig} 天 / 總交易日 {len(sigdf)} 天")
+            m1,m2,m3,m4=st.columns(4)
+            m1.metric("總報酬",pct(met["總報酬%"])); m2.metric("CAGR",pct(met["CAGR%"]))
+            m3.metric("MDD",pct(met["MDD%"])); m4.metric("Sharpe",f'{met["Sharpe"]:.2f}' if not math.isnan(met["Sharpe"]) else "—")
+            m5,m6,m7,m8=st.columns(4)
+            m5.metric("交易次數",int(met["交易次數"])); m6.metric("勝率",pct(met["勝率%"]))
+            m7.metric("平均單筆",pct(met["平均單筆%"])); m8.metric("0050同期",pct(met["0050買進持有%"]))
+            comp=curve.reset_index().melt(id_vars="Date",value_vars=["策略淨值","0050買進持有","PCB等權買進持有"],var_name="項目",value_name="淨值")
+            fig=px.line(comp,x="Date",y="淨值",color="項目",title="策略 vs 0050 vs PCB 等權")
+            st.plotly_chart(fig,use_container_width=True)
+            dd=curve["策略淨值"]/curve["策略淨值"].cummax()-1
+            fig2=px.area(dd.reset_index(),x="Date",y="策略淨值",title="策略回撤")
+            fig2.update_traces(fillcolor="rgba(220,60,60,0.4)",line_color="rgb(220,60,60)")
+            fig2.update_yaxes(tickformat=".0%"); st.plotly_chart(fig2,use_container_width=True)
+            if log.empty:
+                st.info("沒有完成交易。建議放寬條件（降低 leader_min 或 core_min）試試。")
+            else:
+                for c in ["Leader_LB%","Core_LB%","Follower_LB%","Bench_LB%","毛報酬%","淨報酬%"]:
+                    if c in log.columns: log[c]=pd.to_numeric(log[c],errors="coerce").round(2)
+                st.dataframe(log,use_container_width=True,hide_index=True)
+                st.download_button("下載交易紀錄",log.to_csv(index=False).encode("utf-8-sig"),"trade_log_v3.csv",key="dl_v3")
+    with st.expander("🧪 敏感度測試（81 組參數，較慢）"):
+        st.caption("跑 lookback × holding × TP × SL = 3×3×3×3 = 81 組，每組約 1-3 秒。")
+        if st.button("執行敏感度測試",key="run_sens"):
+            with st.spinner("跑 81 組參數中…"):
+                sens=run_sensitivity(period_v3,leader_min,core_min,follower_max,bench_min,pos_v3,
+                                     [10,20,40],[10,20,40],[0.10,0.15,0.20],[-0.05,-0.10,-0.15])
+            for c in ["CAGR%","MDD%","Sharpe","勝率%"]: sens[c]=pd.to_numeric(sens[c],errors="coerce").round(2)
+            st.dataframe(sens.sort_values("CAGR%",ascending=False),use_container_width=True,hide_index=True)
+            st.download_button("下載敏感度結果",sens.to_csv(index=False).encode("utf-8-sig"),"sensitivity_v3.csv",key="dl_sens")
